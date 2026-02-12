@@ -1,0 +1,658 @@
+{
+  "name": "Official Reddit API discussion finder",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 5
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        1056
+      ],
+      "id": "d3ec0b60-8b35-4b6d-9c72-6735d83d6afe",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "d20f3fba-a67d-4f6e-b7cb-3918003ae581",
+              "name": "queries",
+              "value": "best car to buy south africa, where to buy first car south africa, used car buying advice south africa, best place to buy a used car south africa, ",
+              "type": "string"
+            },
+            {
+              "id": "8ec2fa51-378f-4a65-a99a-6e249f2b5e3d",
+              "name": "maxAgeDays",
+              "value": 180,
+              "type": "number"
+            },
+            {
+              "id": "58787334-217f-4cd8-8d1b-fb9dc3ec8f4c",
+              "name": "minComments",
+              "value": 0,
+              "type": "number"
+            },
+            {
+              "id": "e26322a4-4a48-4db7-bfeb-de1a91a4752d",
+              "name": "minUpvotes",
+              "value": 0,
+              "type": "number"
+            },
+            {
+              "id": "3315327a-094c-470b-8bdf-4a9f4267ee86",
+              "name": "blockedSubreddits",
+              "value": "forzaauctions, oneorangebraincell, beeswarmsimulator",
+              "type": "string"
+            },
+            {
+              "id": "5a211267-0481-4ef5-b383-98f53db1d7d0",
+              "name": "limitPerQuery",
+              "value": 25,
+              "type": "number"
+            },
+            {
+              "id": "879479d7-7ce8-4a75-812e-726f3937e87f",
+              "name": "testMode",
+              "value": false,
+              "type": "boolean"
+            },
+            {
+              "id": "68a6db30-e2db-4170-91f6-d96220dc0e3e",
+              "name": "testQueries",
+              "value": "what car should i buy south africa",
+              "type": "string"
+            },
+            {
+              "id": "afc61823-6996-41a8-b896-409676431e5d",
+              "name": "maxQueriesToRun",
+              "value": 10,
+              "type": "number"
+            },
+            {
+              "id": "fd801b1e-8a36-40b7-96e8-8af34db80543",
+              "name": "saGating",
+              "value": true,
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        224,
+        1056
+      ],
+      "id": "0ea3edb0-4061-44b2-aa0c-5d01b19a56b3",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get config from previous node\nconst input = items[0].json;\n\n\n\n// Decide which queries to use\nconst rawQueries = input.testMode ? input.testQueries : input.queries;\n\n// Turn string into array\nlet queries = rawQueries\n  .split(',')\n  .map(q => q.trim())\n  .filter(q => q.length > 0);\n\n// Limit number of queries to run\nconst maxQueriesToRun = Number(input.maxQueriesToRun ?? queries.length);\nqueries = queries.slice(0, maxQueriesToRun);\n\n\n\n// Parse blocked subreddits\nconst blockedSubreddits = input.blockedSubreddits\n  ? input.blockedSubreddits.split(',').map(s => s.trim().toLowerCase())\n  : [];\n\n// Force numbers\nconst maxAgeDays = Number(input.maxAgeDays);\nconst minComments = Number(input.minComments);\nconst minUpvotes = Number(input.minUpvotes);\nconst limitPerQuery = Number(input.limitPerQuery);\n\n// Output structured config\nreturn [{\n  json: {\n    queries,\n    blockedSubreddits,\n    maxAgeDays,\n    minComments,\n    minUpvotes,\n    limitPerQuery,\n    saGating: !!input.saGating\n  }\n}];\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        1056
+      ],
+      "id": "0f01adf4-6740-4562-8c30-97076571730c",
+      "name": "Convert into array"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        896,
+        1056
+      ],
+      "id": "e18fe77c-00a9-432f-8895-878609c77f7d",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = items[0].json;\n\nreturn cfg.queries.map(q => ({\n  json: {\n    query: q,\n    // carry config forward so later nodes still have it\n    blockedSubreddits: cfg.blockedSubreddits,\n    maxAgeDays: cfg.maxAgeDays,\n    minComments: cfg.minComments,\n    minUpvotes: cfg.minUpvotes,\n    limitPerQuery: cfg.limitPerQuery,\n    saGating: cfg.saGating,\n\n  }\n}));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        1056
+      ],
+      "id": "a80ed890-4230-4039-ba97-b98613008ceb",
+      "name": "Explore queries"
+    },
+    {
+      "parameters": {
+        "jsCode": "/**\n * Normalise (Reddit public JSON search) + light filtering (wide-net)\n * Input expected: HTTP GET https://www.reddit.com/search.json?q=...&limit=...&sort=...\n * Output: one item per post with consistent fields for downstream OpenAI ranking.\n *\n * Philosophy:\n * - Keep almost everything that looks remotely relevant.\n * - Only hard drop: missing title/url/subreddit, blocked subreddits, very old (maxAgeDays).\n * - Add soft signals (SA score, intent flag) but do NOT reject on them.\n */\n\n// ---------------- helpers ----------------\nfunction toInt(v, d = 0) {\n  const n = Number(v);\n  return Number.isFinite(n) ? n : d;\n}\nfunction normStr(v) {\n  return (v ?? \"\").toString().trim();\n}\nfunction lower(v) {\n  return normStr(v).toLowerCase();\n}\nfunction daysOldFromUtcSeconds(utcSeconds) {\n  const t = toInt(utcSeconds, 0) * 1000;\n  if (!t) return 99999;\n  return Math.floor((Date.now() - t) / (1000 * 60 * 60 * 24));\n}\nfunction toList(v) {\n  if (Array.isArray(v)) return v.map(x => lower(x)).filter(Boolean);\n  if (typeof v === \"string\") return v.split(\",\").map(s => lower(s)).filter(Boolean);\n  return [];\n}\nfunction includesAny(text, arr) {\n  const t = lower(text);\n  return arr.some(k => t.includes(k));\n}\n\n// ---------------- read input ----------------\nconst payload = items[0]?.json ?? {};\nconst query = normStr($json.query || payload?.data?.query || \"\");\n\n// Reddit search JSON shape: payload.data.children[].data\nconst children = Array.isArray(payload?.data?.children) ? payload.data.children : [];\n\n// ---------------- settings (from your workflow config) ----------------\nconst maxAgeDays = toInt($json.maxAgeDays, 180);\nconst limitPerQuery = toInt($json.limitPerQuery, 25);\n\nconst blockedSubreddits = new Set(toList($json.blockedSubreddits));\nconst saGating = ($json.saGating === undefined) ? true : !!$json.saGating;\n\n// Known junk subs (keep your own list here)\nconst knownJunkSubs = new Set([\n  \"forzaauctions\",\n  \"oneorangebraincell\",\n  \"beeswarmsimulator\",\n]);\n\n// Soft keyword lists (do NOT hard-reject, only flags)\nconst carBuySignals = [\n  \"what car should i buy\", \"which car should i buy\", \"recommend\", \"suggest\",\n  \"buy a car\", \"buying a car\", \"looking to buy\", \"need a car\",\n  \"used car\", \"second hand\", \"pre owned\", \"pre-owned\", \"demo car\",\n  \"car finance\", \"financing\", \"installment\", \"instalment\", \"interest rate\",\n  \"deposit\", \"balloon\", \"trade in\", \"trade-in\",\n  \"first car\", \"new car\", \"budget\", \"under\", \"around\", \"worth it\",\n  \"reliable\", \"fuel consumption\", \"maintenance\", \"service history\"\n];\n\nconst saSignals = [\n  \"south africa\", \"southafrica\", \"rsa\", \"za\",\n  \"cape town\", \"capetown\", \"joburg\", \"johannesburg\", \"jhb\", \"durban\",\n  \"gauteng\", \"western cape\", \"kwazulu\", \"kzn\", \"pretoria\",\n  \"port elizabeth\", \"gqeberha\", \"stellenbosch\", \"bloemfontein\",\n  \"east london\", \"polokwane\",\n  // currency-like hints (soft)\n  \"rand\", \"zar\"\n];\n\n// Simple currency pattern for SA prices like \"R500k\", \"R 150 000\", \"R150,000\"\nconst saCurrencyRegex = /\\bR\\s?\\d{2,3}([.,\\s]?\\d{3})*([kK])?\\b/;\n\n// ---------------- map + light filter ----------------\nconst mapped = [];\n\nfor (const child of children) {\n  const d = child?.data;\n  if (!d) continue;\n\n  const subreddit = normStr(d.subreddit);\n  const title = normStr(d.title);\n  const content = normStr(d.selftext); // reddit uses selftext for body\n  const id = normStr(d.id);\n  const createdUtc = toInt(d.created_utc, 0);\n  const ageDays = daysOldFromUtcSeconds(createdUtc);\n\n  // Full URL from permalink (preferred)\n  const permalink = normStr(d.permalink);\n  const url = permalink ? `https://www.reddit.com${permalink}` : normStr(d.url);\n\n  const upvotes = toInt(d.ups ?? d.score, 0);\n  const comments = toInt(d.num_comments, 0);\n\n  // ---- HARD DROPS (wide net, keep minimal) ----\n  if (!title || !url || !subreddit) continue;\n\n  const subLower = lower(subreddit);\n  if (blockedSubreddits.size && blockedSubreddits.has(subLower)) continue;\n  if (knownJunkSubs.has(subLower)) continue;\n  if (ageDays > maxAgeDays) continue;\n\n  // ---- SOFT signals (no rejections) ----\n  const text = `${title}\\n${content}\\n${query}`;\n\n  let saScore = 0;\n  if (includesAny(text, saSignals)) saScore += 2;\n  if (saCurrencyRegex.test(text)) saScore += 2;\n\n  // If it's literally in a SA-related subreddit, boost softly\n  const saLocalSubs = new Set([\"southafrica\", \"capetown\", \"johannesburg\", \"durban\", \"pretoria\"]);\n  if (saLocalSubs.has(subLower)) saScore += 3;\n\n  const isCarBuyIntent = includesAny(text, carBuySignals);\n\n  // If saGating is enabled, we *still* keep wide net — but tag likely SA relevance\n  // (We are NOT rejecting here; downstream AI can reject.)\n  const saLikely = saScore >= 2;\n\n  mapped.push({\n    source: \"reddit_json\",\n    query,\n    id,\n    title,\n    content,\n    subreddit,\n    upvotes,\n    comments,\n    created: createdUtc ? new Date(createdUtc * 1000).toISOString() : \"\",\n    ageDays,\n    url,\n\n    // soft signals for AI / scoring\n    saScore,\n    saLikely,\n    isCarBuyIntent,\n  });\n}\n\n// If API returned nothing or everything got filtered, emit a noResults record\nif (!mapped.length) {\n  return [{\n    json: {\n      noResults: true,\n      reason: children.length ? \"No items after minimal filtering\" : \"No results from Reddit search\",\n      query,\n      source: \"reddit_json\",\n      debug: {\n        countIn: children.length,\n        maxAgeDays,\n        limitPerQuery,\n        blockedSubreddits: Array.from(blockedSubreddits),\n        saGating\n      }\n    }\n  }];\n}\n\n// Optional: keep top N by a light “activity” sort (newer + some engagement)\n// This is NOT your final ranking — it just makes output slightly nicer.\nmapped.sort((a, b) => {\n  const aScore = (a.upvotes * 0.2) + (a.comments * 0.6) - (a.ageDays * 0.05);\n  const bScore = (b.upvotes * 0.2) + (b.comments * 0.6) - (b.ageDays * 0.05);\n  return bScore - aScore;\n});\n\n// Cap to limitPerQuery so each query doesn’t explode downstream\nconst out = mapped.slice(0, limitPerQuery);\n\nreturn out.map(x => ({ json: x }));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1632,
+        1136
+      ],
+      "id": "897e34af-a69b-48c9-87e3-59f53ee0fd62",
+      "name": "Normalise and filter"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1AH1-xWJhUTtt3hf_NL4wduvVJI4RD6LOdwp255vZT4s",
+          "mode": "list",
+          "cachedResultName": "Discussion finder backlog",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1AH1-xWJhUTtt3hf_NL4wduvVJI4RD6LOdwp255vZT4s/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1AH1-xWJhUTtt3hf_NL4wduvVJI4RD6LOdwp255vZT4s/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "date": "={{$now}}",
+            "source": "={{$json.source}}",
+            "query": "={{$json.query}}",
+            "title": "={{$json.title}}",
+            "url": "={{$json.url}}",
+            "subreddit": "={{$json.subreddit}}",
+            "upvotes": "={{$json.upvotes}}",
+            "comments": "={{$json.comments}}",
+            "created": "={{$json.created}}",
+            "ageDays": "={{$json.ageDays}}",
+            "saLikely": "={{$json.saLikely}}",
+            "saScore": "={{$json.saScore}}",
+            "isCarBuyIntent": "={{$json.isCarBuyIntent}}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "date",
+              "displayName": "date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "query",
+              "displayName": "query",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "url",
+              "displayName": "url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "subreddit",
+              "displayName": "subreddit",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "upvotes",
+              "displayName": "upvotes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "comments",
+              "displayName": "comments",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "created",
+              "displayName": "created",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "risk",
+              "displayName": "risk",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ageDays",
+              "displayName": "ageDays",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "saLikely",
+              "displayName": "saLikely",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "saScore",
+              "displayName": "saScore",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "isCarBuyIntent",
+              "displayName": "isCarBuyIntent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1344,
+        672
+      ],
+      "id": "f6eca33e-0ba3-4108-804b-c6292d7c2790",
+      "name": "Append row in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "wx2tzQKSLAJ5B9RO",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "bbfa6da9-c087-4015-ba65-d09b5f26cd59",
+              "leftValue": "={{ Number($json.count) }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1344,
+        864
+      ],
+      "id": "ee0a9aa6-2841-492e-b76b-d9aa247774be",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "fromEmail": "grace4kayla@gmail.com",
+        "toEmail": "kaylab@fivefriday.com",
+        "subject": "={{$json.output[0].content[0].text.split('\\n')[0].replace('SUBJECT: ','')}}\n\n",
+        "emailFormat": "text",
+        "text": "=={{$json.output[0].content[0].text}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1920,
+        864
+      ],
+      "id": "2e33d07a-7bfe-4d4c-912f-fec868786f25",
+      "name": "Send email",
+      "webhookId": "66c5ecaa-7628-4917-9438-2de8101bf484",
+      "credentials": {
+        "smtp": {
+          "id": "Iv13tNM1eZQmVGph",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collect ALL posts from Normalise node\nconst posts = $items(\"Normalise and filter\").map(i => i.json);\n\n// Keep only valid-ish items (minimal)\nconst valid = posts.filter(p =>\n  p &&\n  !p.noResults &&\n  p.title &&\n  p.url &&\n  p.subreddit\n);\n\n// Dedupe by URL (or id if you prefer)\nconst seen = new Set();\nconst deduped = [];\nfor (const p of valid) {\n  const key = (p.id || p.url || \"\").toString();\n  if (!key || seen.has(key)) continue;\n  seen.add(key);\n  deduped.push(p);\n}\n\nreturn [{\n  json: {\n    date: new Date().toISOString().slice(0, 10),\n    count: deduped.length,\n    opportunities: deduped\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        768
+      ],
+      "id": "dbd6b75d-018c-432d-8f83-7ffca7006df2",
+      "name": "Collect all posts"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4.1-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "content": "=You are Traffic Scout for a South African car dealership web app (My Car Match / MCM). Your job is to identify Reddit threads worth checking and potentially replying to.\n\nYou are NOT a marketer. You are a helpful South African car enthusiast who gives practical advice.\nNever sound like advertising, SEO, or sales. Avoid phrases like “check out our site” or “contact us”.\nTone: friendly, professional, South African, practical. No emojis. No hype. No corporate jargon.\nDo not invent facts.\n\nDATA:\n{{ JSON.stringify($json.opportunities, null, 2) }}\n\nTASK:\nCreate a clean, readable daily email report that surfaces the best Reddit posts to review today.\n\nWIDE NET RULE (IMPORTANT):\n- PASS any post that is even vaguely about:\n  • buying a car in South Africa\n  • where to buy a car in South Africa\n  • what car to buy / recommendations\n  • budgets (e.g., “R500k”, “under R150k”, “around 500k”)\n  • used cars / reliability / first car / finance / balloon payments\n- REJECT only if clearly unrelated (memes, gaming, car pics with no buying intent, mechanical-only with no buying intent, scams/spam).\n\nSELECTION:\n- Choose 5–10 opportunities maximum.\n- Prefer newer threads (ideally <= 90 days; newer is better).\n- Prefer posts that are questions or advice-seeking.\n- Prefer posts likely to involve a purchase decision soon (budget/timeline/comparison/finance).\n- If uncertain, include it as an opportunity (we’ll check manually).\n\nLINK POLICY:\nWe cannot see comment context. You must judge from title/body only.\nFor each opportunity output:\n- Link Likelihood: High / Medium / Low\n- Link Strategy:\n  - High: include the link softly at the end (one link only)\n  - Medium: do NOT include a link; say you can share links if they want\n  - Low: advice only, no mention of links\n\nUse this link unless a more relevant page is obvious:\nhttps://staging.mycarmatch.co.za\n\nFor EACH opportunity include:\n• Thread Title\n• Subreddit\n• Upvotes & Comments\n• Thread URL\n• Why it’s a good fit (1 sentence)\n• Link Likelihood (High/Medium/Low)\n• Link Strategy (High=include link / Medium=offer to share / Low=no link)\n• Suggested Human Reply (max 120 words, value-first)\n• Suggested Link (only if Link Likelihood is High; otherwise write “(none)”)\n• Risk Rating: Low / Medium / High\n• Risk Reason (short)\n\nRISK GUIDANCE:\n- High risk if the post seems promotional-sensitive, rules-heavy, spammy, or very old with no engagement.\n- Medium risk if uncertain.\n- Low risk if it’s a clear advice question in a normal community.\n\nEMAIL FORMAT MUST BE EXACTLY:\n\nSUBJECT: <short subject with number of opportunities>\n\nBODY:\n\nHi Kayla,\n\n<2–3 sentence overview of what people seem to be asking about today (based only on these posts).>\n\n---\n\n### Opportunity 1\nThread Title:\nSubreddit:\nUpvotes & Comments:\nThread URL:\nWhy it's a good fit:\nLink Likelihood:\nLink Strategy:\nSuggested Human Reply:\nSuggested Link:\nRisk Rating:\nRisk Reason:\n\n---\n\n### Opportunity 2\n<same fields>\n\n(continue as needed, max 10)\n\n---\n\nIf there are ZERO valid opportunities, include ONLY this paragraph instead of opportunities:\n“No strong opportunities found today — most results were unrelated or too risky. I suggest we skip posting.”\n\nSign off exactly as:\nChat\nMCM\n"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        1568,
+        864
+      ],
+      "id": "4aa246c8-dee2-4a4a-bf28-8a2aa863f2b9",
+      "name": "Message a model",
+      "credentials": {
+        "openAiApi": {
+          "id": "zyD7lYXizPW0rRxI",
+          "name": "n8n free OpenAI API credits"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 2
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1120,
+        1056
+      ],
+      "id": "777c3b86-8680-483e-b92a-87f81940ad84",
+      "name": "Wait",
+      "webhookId": "ab05469a-d440-4f0f-9b61-7dc869ed0bed"
+    },
+    {
+      "parameters": {
+        "url": "https://www.reddit.com/search.json",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{$json.query}}"
+            },
+            {
+              "name": "sort",
+              "value": "new"
+            },
+            {
+              "name": "limit",
+              "value": "={{$json.limitPerQuery}}"
+            },
+            {
+              "name": "t",
+              "value": "year"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "n8n:mcm-reddit-scout:v1.0 (by /u/Five-Friday)"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1344,
+        1056
+      ],
+      "id": "3fb0406a-7dfd-4ded-88d5-774c8d2d3233",
+      "name": "Get queries",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "Convert into array",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert into array": {
+      "main": [
+        [
+          {
+            "node": "Explore queries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "Collect all posts",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Explore queries": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalise and filter": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append row in sheet": {
+      "main": [
+        []
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect all posts": {
+      "main": [
+        [
+          {
+            "node": "Append row in sheet",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model": {
+      "main": [
+        [
+          {
+            "node": "Send email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Get queries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get queries": {
+      "main": [
+        [
+          {
+            "node": "Normalise and filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "versionId": "6b9c394a-5bc6-4c81-9ca6-61250062e0fb",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "ff1889000e24854e4bc910abf26222672f2a89c7a683a90a8296fe7792d646b9"
+  },
+  "id": "oIUrYRQK8ly9k9BN",
+  "tags": []
+}
